@@ -876,7 +876,7 @@ def calculate_train(
     name_project,
     batch_size_type,
     max_samples,
-    learning_rate,
+    learning_rate, 
     num_warmup_updates,
     save_per_updates,
     last_per_steps,
@@ -889,7 +889,7 @@ def calculate_train(
         return (
             1000,
             max_samples,
-            num_warmup_updates,
+            num_warmup_updates, 
             save_per_updates,
             last_per_steps,
             "project not found !",
@@ -903,86 +903,79 @@ def calculate_train(
     samples = len(duration_list)
     hours = sum(duration_list) / 3600
 
-    # if torch.cuda.is_available():
-    # gpu_properties = torch.cuda.get_device_properties(0)
-    # total_memory = gpu_properties.total_memory / (1024**3)
-    # elif torch.backends.mps.is_available():
-    # total_memory = psutil.virtual_memory().available / (1024**3)
+    # Khởi tạo giá trị mặc định
+    total_memory = 8 # GB
+    gpu_count = 1
 
+    # Kiểm tra GPU và tính toán bộ nhớ
     if torch.cuda.is_available():
         gpu_count = torch.cuda.device_count()
         total_memory = 0
         for i in range(gpu_count):
             gpu_properties = torch.cuda.get_device_properties(i)
-            total_memory += gpu_properties.total_memory / (1024**3)  # in GB
+            total_memory += gpu_properties.total_memory / (1024**3)  # Chuyển đổi sang GB
 
     elif torch.backends.mps.is_available():
         gpu_count = 1
-        total_memory = psutil.virtual_memory().available / (1024**3)
+        total_memory = psutil.virtual_memory().available / (1024**3)  # Chuyển đổi sang GB
 
-    if batch_size_type == "frame":
-        batch = int(total_memory * 0.5)
-        batch = (lambda num: num + 1 if num % 2 != 0 else num)(batch)
-        batch_size_per_gpu = int(38400 / batch)
     else:
-        batch_size_per_gpu = int(total_memory / 8)
-        batch_size_per_gpu = (lambda num: num + 1 if num % 2 != 0 else num)(batch_size_per_gpu)
+        # CPU mode
+        total_memory = psutil.virtual_memory().available / (1024**3)  # Chuyển đổi sang GB
+
+    # Tính toán batch size dựa trên loại
+    if batch_size_type == "frame":
+        batch = max(1, int(total_memory * 0.5))  # Đảm bảo batch size tối thiểu là 1
+        batch = (batch + 1) if batch % 2 != 0 else batch # Làm tròn lên số chẵn
+        batch_size_per_gpu = max(1, int(38400 / batch))
+    else:
+        batch_size_per_gpu = max(1, int(total_memory / 8))
+        batch_size_per_gpu = (batch_size_per_gpu + 1) if batch_size_per_gpu % 2 != 0 else batch_size_per_gpu
         batch = batch_size_per_gpu
 
-    if batch_size_per_gpu <= 0:
-        batch_size_per_gpu = 1
-
+    # Tính toán các thông số khác
     if samples < 64:
-        max_samples = int(samples * 0.25)
+        max_samples = max(1, int(samples * 0.25))
     else:
         max_samples = 64
 
-    num_warmup_updates = int(samples * 0.05)
-    save_per_updates = int(samples * 0.10)
-    last_per_steps = int(save_per_updates * 0.25)
+    num_warmup_updates = max(1, int(samples * 0.05))
+    save_per_updates = max(1, int(samples * 0.10))
+    last_per_steps = max(2, int(save_per_updates * 0.25))
 
-    max_samples = (lambda num: num + 1 if num % 2 != 0 else num)(max_samples)
-    num_warmup_updates = (lambda num: num + 1 if num % 2 != 0 else num)(num_warmup_updates)
-    save_per_updates = (lambda num: num + 1 if num % 2 != 0 else num)(save_per_updates)
-    last_per_steps = (lambda num: num + 1 if num % 2 != 0 else num)(last_per_steps)
-    if last_per_steps <= 0:
-        last_per_steps = 2
+    # Làm tròn các giá trị lên số chẵn
+    max_samples = (max_samples + 1) if max_samples % 2 != 0 else max_samples
+    num_warmup_updates = (num_warmup_updates + 1) if num_warmup_updates % 2 != 0 else num_warmup_updates 
+    save_per_updates = (save_per_updates + 1) if save_per_updates % 2 != 0 else save_per_updates
+    last_per_steps = (last_per_steps + 1) if last_per_steps % 2 != 0 else last_per_steps
 
+    # Tính số epochs
     total_hours = hours
     mel_hop_length = 256
     mel_sampling_rate = 24000
-
-    # target
     wanted_max_updates = 1000000
 
-    # train params
-    gpus = gpu_count
-    frames_per_gpu = batch_size_per_gpu  # 8 * 38400 = 307200
+    frames_per_gpu = batch_size_per_gpu
     grad_accum = 1
 
-    # intermediate
-    mini_batch_frames = frames_per_gpu * grad_accum * gpus
+    mini_batch_frames = frames_per_gpu * grad_accum * gpu_count
     mini_batch_hours = mini_batch_frames * mel_hop_length / mel_sampling_rate / 3600
     updates_per_epoch = total_hours / mini_batch_hours
-    # steps_per_epoch = updates_per_epoch * grad_accum
-    epochs = wanted_max_updates / updates_per_epoch
+    epochs = max(1, int(wanted_max_updates / updates_per_epoch))
 
-    if finetune:
-        learning_rate = 1e-5
-    else:
-        learning_rate = 7.5e-5
+    # Set learning rate
+    learning_rate = 1e-5 if finetune else 7.5e-5
 
     return (
         batch_size_per_gpu,
         max_samples,
         num_warmup_updates,
-        save_per_updates,
+        save_per_updates, 
         last_per_steps,
         samples,
         learning_rate,
-        int(epochs),
+        epochs
     )
-
 
 def extract_and_save_ema_model(checkpoint_path: str, new_checkpoint_path: str, safetensors: bool) -> str:
     try:
